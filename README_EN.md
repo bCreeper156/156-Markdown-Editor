@@ -21,11 +21,3 @@
 2. Wait for dependencies to install.
 
 3. The editor will start automatically.
-
-## Known Limitations (alpha 0.1.0)
-
-* PDF export is not yet integrated.
-
-* Code block syntax highlighting needs optimization.
-
-* Real-time rendering is planned for a later version.
