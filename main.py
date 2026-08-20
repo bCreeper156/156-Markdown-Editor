@@ -1,89 +1,214 @@
 import os
 import re
-import shutil
-import subprocess
+import sys
+import webbrowser
 import tempfile
+import subprocess
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
 import markdown
 import pywinstyles
+from tkhtmlview import HTMLLabel
 
-# Word 导出使用 pypandoc（自动处理格式）
-try:
-    import pypandoc
-    PYPANDOC_AVAILABLE = True
-except ImportError:
-    PYPANDOC_AVAILABLE = False
+# ---------- 资源路径（兼容打包） ----------
+def resource_path(relative_path):
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
 
+bin_dir = resource_path("bin")
+if os.path.exists(bin_dir):
+    os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
 
-def _find_wkhtmltopdf():
-    """自动定位 wkhtmltopdf 可执行文件"""
-    candidates = [
-        os.environ.get("WKHTMLTOPDF_PATH", ""),
-        shutil.which("wkhtmltopdf"),
-        r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe",
-        r"C:\Program Files (x86)\wkhtmltopdf\bin\wkhtmltopdf.exe",
-    ]
-    for path in candidates:
-        if path and os.path.isfile(path):
-            return path
-    return None
+# ---------- 颜色方案 ----------
+def _winui_colors(mode="light"):
+    if mode == "dark":
+        return {
+            "bg": "#1c1c1c",
+            "surface": "#2a2a2a",
+            "border": "#3a3a3a",
+            "text": "#f0f0f0",
+            "text_secondary": "#a0a0a0",
+            "accent": "#0078d4",
+            "accent_hover": "#1a8ad4",
+            "active_line": "#3a3a3a",
+        }
+    else:
+        return {
+            "bg": "#f5f5f5",
+            "surface": "#ffffff",
+            "border": "#d0d0d0",
+            "text": "#1a1a1a",
+            "text_secondary": "#606060",
+            "accent": "#0078d4",
+            "accent_hover": "#106ebe",
+            "active_line": "#e5e5e5",
+        }
 
+# ---------- 设置窗口 ----------
+class SettingsWindow(ctk.CTkToplevel):
+    def __init__(self, master, current_theme, auto_save_enabled, auto_save_interval):
+        super().__init__(master)
+        self.master = master
+        self.title("设置")
+        self.geometry("400x450")
+        self.resizable(False, False)
 
-def export_pdf(html_doc, output_path):
-    """使用 wkhtmltopdf 将 HTML 字符串导出为 PDF"""
-    exe = _find_wkhtmltopdf()
-    if not exe:
-        raise FileNotFoundError(
-            "未找到 wkhtmltopdf，请先安装后重试：\n"
-            "https://wkhtmltopdf.org/downloads.html\n"
-            "（安装后如仍找不到，可设置环境变量 WKHTMLTOPDF_PATH 指向其可执行文件）"
+        # 主题
+        self.current_theme = current_theme
+        self.auto_save_enabled = auto_save_enabled
+        self.auto_save_interval = auto_save_interval
+
+        # 设置窗口颜色
+        self.colors = _winui_colors(current_theme)
+        self.configure(fg_color=self.colors["surface"])
+
+        # ---------- 界面控件 ----------
+        main_frame = ctk.CTkFrame(self, fg_color="transparent")
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # 自动保存
+        auto_save_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        auto_save_frame.pack(fill="x", pady=5)
+
+        self.auto_save_var = ctk.BooleanVar(value=self.auto_save_enabled)
+        self.auto_save_check = ctk.CTkCheckBox(
+            auto_save_frame,
+            text="启用自动保存",
+            variable=self.auto_save_var,
+            command=self.on_auto_save_toggle
         )
-    fd, tmp_html = tempfile.mkstemp(suffix=".html", prefix="md_export_")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(html_doc)
-        subprocess.run(
-            [exe, "--quiet", "--encoding", "utf-8", "--enable-local-file-access",
-             tmp_html, output_path],
-            check=True
+        self.auto_save_check.pack(side="left", padx=5)
+
+        self.interval_label = ctk.CTkLabel(auto_save_frame, text="间隔 (秒):")
+        self.interval_label.pack(side="left", padx=(10, 5))
+
+        self.interval_entry = ctk.CTkEntry(auto_save_frame, width=60)
+        self.interval_entry.insert(0, str(self.auto_save_interval))
+        self.interval_entry.pack(side="left", padx=5)
+
+        # 主题切换
+        theme_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        theme_frame.pack(fill="x", pady=10)
+
+        ctk.CTkLabel(theme_frame, text="主题模式:").pack(side="left", padx=5)
+        self.theme_var = ctk.StringVar(value=current_theme)
+        theme_options = ["system", "light", "dark"]
+        self.theme_menu = ctk.CTkOptionMenu(
+            theme_frame,
+            values=theme_options,
+            variable=self.theme_var,
+            command=self.on_theme_change
         )
-    finally:
+        self.theme_menu.pack(side="left", padx=5)
+
+        # 关于信息
+        about_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        about_frame.pack(fill="x", pady=20)
+
+        ctk.CTkLabel(about_frame, text="关于", font=("Segoe UI", 14, "bold")).pack(anchor="w")
+
+        version_label = ctk.CTkLabel(about_frame, text="版本: alpha 0.1.5", font=("Segoe UI", 12))
+        version_label.pack(anchor="w", pady=2)
+
+        author_label = ctk.CTkLabel(about_frame, text="制作者: Creeper156 (bCreeper156)", font=("Segoe UI", 12))
+        author_label.pack(anchor="w", pady=2)
+
+        github_link = ctk.CTkButton(
+            about_frame,
+            text="作者 GitHub 主页",
+            width=150,
+            command=lambda: webbrowser.open("https://github.com/bCreeper156")
+        )
+        github_link.pack(anchor="w", pady=5)
+
+        update_btn = ctk.CTkButton(
+            about_frame,
+            text="检查更新",
+            width=150,
+            command=lambda: webbrowser.open("https://github.com/bCreeper156/156-markdown-editor/releases")
+        )
+        update_btn.pack(anchor="w", pady=5)
+
+        # 关闭按钮
+        close_btn = ctk.CTkButton(main_frame, text="关闭", command=self.destroy)
+        close_btn.pack(pady=10)
+
+        # 绑定窗口关闭事件，应用设置
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def on_auto_save_toggle(self):
+        # 更新主程序的自动保存状态
+        self.master.auto_save_enabled = self.auto_save_var.get()
+        # 若启用则重置定时器
+        if self.master.auto_save_enabled:
+            self.master.reset_auto_save_timer()
+        else:
+            self.master.cancel_auto_save_timer()
+
+    def on_theme_change(self, choice):
+        self.current_theme = choice
+        # 更新主程序主题
+        self.master.set_theme(choice)
+        # 更新本窗口颜色
+        self.colors = _winui_colors(choice)
+        self.configure(fg_color=self.colors["surface"])
+
+    def on_close(self):
+        # 读取间隔输入框的值
         try:
-            os.unlink(tmp_html)
-        except OSError:
-            pass
+            interval = int(self.interval_entry.get())
+            if interval <= 0:
+                raise ValueError
+            self.master.auto_save_interval = interval
+        except ValueError:
+            messagebox.showwarning("无效值", "自动保存间隔必须是正整数，已恢复为默认值 30 秒。")
+            self.interval_entry.delete(0, tk.END)
+            self.interval_entry.insert(0, "30")
+            self.master.auto_save_interval = 30
+
+        # 应用自动保存状态
+        self.master.auto_save_enabled = self.auto_save_var.get()
+        if self.master.auto_save_enabled:
+            self.master.reset_auto_save_timer()
+        else:
+            self.master.cancel_auto_save_timer()
+
+        self.destroy()
 
 
+# ---------- 主编辑器 ----------
 class MarkdownEditor(ctk.CTk):
     def __init__(self):
         super().__init__()
 
         self.title("156 Markdown Editor")
         self.geometry("1200x700")
-        ctk.set_appearance_mode("system")
-        ctk.set_default_color_theme("blue")
-        self.UI_FONT = "Segoe UI"
-        self._tool_buttons = []
 
-        c = self._winui_colors()
-        # WinUI 现代背景：Windows 11 Mica 材质（失败自动回退纯色）
+        # 初始主题
+        self.current_theme = ctk.get_appearance_mode().lower()
+        self.colors = _winui_colors(self.current_theme)
+
+        # 自动保存设置
+        self.auto_save_enabled = True
+        self.auto_save_interval = 30
+        self.auto_save_timer = None
+
+        # 应用 Mica 效果 (Windows)
         try:
-            pywinstyles.apply_style(self, "mica")
-        except Exception:
-            pass
-        self.configure(fg_color=c["window"])
-        try:
-            pywinstyles.change_header_color(self, c["title"])
+            pywinstyles.apply_style(self, "dark" if self.current_theme == "dark" else "light")
+            pywinstyles.change_header_color(self, self.colors["bg"])
         except Exception:
             pass
 
         # ---------- 菜单 ----------
-        self.menu_bar = tk.Menu(self, font=(self.UI_FONT, 10))
+        self.menu_bar = tk.Menu(self)
         self.config(menu=self.menu_bar)
-        file_menu = tk.Menu(self.menu_bar, tearoff=0, font=(self.UI_FONT, 10))
+        file_menu = tk.Menu(self.menu_bar, tearoff=0)
         file_menu.add_command(label="新建", command=self.new_file, accelerator="Ctrl+N")
         file_menu.add_command(label="打开", command=self.open_file, accelerator="Ctrl+O")
         file_menu.add_command(label="保存", command=self.save_file, accelerator="Ctrl+S")
@@ -92,16 +217,23 @@ class MarkdownEditor(ctk.CTk):
         file_menu.add_command(label="关闭", command=self.quit_app, accelerator="Alt+F4")
         self.menu_bar.add_cascade(label="文件", menu=file_menu)
 
-        # 快捷键
+        # ---------- 快捷键 ----------
         self.bind("<Control-n>", lambda e: self.new_file())
         self.bind("<Control-o>", lambda e: self.open_file())
         self.bind("<Control-s>", lambda e: self.save_file())
         self.bind("<Control-Shift-S>", lambda e: self.save_as_file())
         self.bind("<Alt-F4>", lambda e: self.quit_app())
+        self.bind("<Control-z>", lambda e: self.undo())
+        self.bind("<Control-y>", lambda e: self.redo())
+        self.bind("<Control-a>", lambda e: self.select_all())
+        self.bind("<Control-x>", lambda e: self.cut())
+        self.bind("<Control-c>", lambda e: self.copy())
+        self.bind("<Control-v>", lambda e: self.paste())
+        self.bind("<Delete>", lambda e: self.delete_selected())
 
-        # ---------- 工具栏（WinUI 风格按钮） ----------
-        self.toolbar_frame = ctk.CTkFrame(self, height=46, fg_color="transparent")
-        self.toolbar_frame.pack(side="top", fill="x", padx=8, pady=(8, 0))
+        # ---------- 工具栏 ----------
+        self.toolbar_frame = ctk.CTkFrame(self, height=40, fg_color="transparent")
+        self.toolbar_frame.pack(side="top", fill="x", padx=10, pady=(5, 0))
         self.toolbar_frame.pack_propagate(False)
 
         # 文件组
@@ -112,7 +244,7 @@ class MarkdownEditor(ctk.CTk):
                           ("关闭", self.quit_app)]:
             self._add_tool_button(file_group, text, cmd)
 
-        self._add_separator()
+        ctk.CTkLabel(self.toolbar_frame, text="|", font=("Segoe UI", 14), text_color=self.colors["text_secondary"]).pack(side="left", padx=5)
 
         # 编辑组
         edit_group = ctk.CTkFrame(self.toolbar_frame, fg_color="transparent")
@@ -122,329 +254,274 @@ class MarkdownEditor(ctk.CTk):
                           ("删除", self.delete_selected)]:
             self._add_tool_button(edit_group, text, cmd)
 
-        self._add_separator()
+        ctk.CTkLabel(self.toolbar_frame, text="|", font=("Segoe UI", 14), text_color=self.colors["text_secondary"]).pack(side="left", padx=5)
 
-        # 设置组
+        # 设置组（原主题切换改为设置按钮）
         settings_group = ctk.CTkFrame(self.toolbar_frame, fg_color="transparent")
         settings_group.pack(side="left", padx=2)
-        self.theme_btn = self._add_tool_button(settings_group, "切换主题", self.toggle_theme, width=90)
+        self.settings_btn = self._add_tool_button(settings_group, "设置", self.open_settings)
+        # 注意：_add_tool_button 中 command 为 self.open_settings
 
-        # ---------- 主布局（WinUI 卡片式） ----------
-        self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_frame.pack(fill="both", expand=True, padx=8, pady=8)
+        # ---------- 主布局 ----------
+        self.main_frame = ctk.CTkFrame(self, fg_color=self.colors["bg"])
+        self.main_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # 大纲（WinUI 侧栏卡片）
-        self.outline_frame = ctk.CTkFrame(self.main_frame, width=200, fg_color=c["card"],
-                                          corner_radius=8)
-        self.outline_frame.pack(side="left", fill="y", padx=(0, 8))
-        self.outline_title = ctk.CTkLabel(
-            self.outline_frame, text="📑 大纲", font=(self.UI_FONT, 14, "bold"),
-            text_color=c["muted"])
-        self.outline_title.pack(pady=(10, 6))
+        # 大纲
+        self.outline_frame = ctk.CTkFrame(self.main_frame, width=200, fg_color=self.colors["surface"])
+        self.outline_frame.pack(side="left", fill="y", padx=(0, 10))
+        ctk.CTkLabel(self.outline_frame, text="📑 大纲", font=("Segoe UI", 16), text_color=self.colors["text"]).pack(pady=5)
         self.outline_listbox = tk.Listbox(
             self.outline_frame,
-            bg=c["card"], fg=c["text"],
-            selectbackground=c["accent"], selectforeground="#ffffff",
-            font=(self.UI_FONT, 11), borderwidth=0, highlightthickness=0,
-            activestyle="none"
+            bg=self.colors["surface"],
+            fg=self.colors["text"],
+            selectbackground=self.colors["accent"],
+            font=("Segoe UI", 11),
+            relief="flat",
+            highlightthickness=0
         )
-        self.outline_listbox.pack(fill="both", expand=True, padx=4, pady=(0, 8))
+        self.outline_listbox.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # 编辑区（WinUI 内容卡片 + 所见即所得）
-        self.edit_frame = ctk.CTkFrame(self.main_frame, fg_color=c["textbox"], corner_radius=8)
+        # 编辑 + 预览
+        self.edit_frame = ctk.CTkFrame(self.main_frame, fg_color=self.colors["surface"])
         self.edit_frame.pack(side="right", fill="both", expand=True)
+
         self.edit_frame.grid_rowconfigure(0, weight=1)
+        self.edit_frame.grid_rowconfigure(1, weight=1)
         self.edit_frame.grid_columnconfigure(0, weight=1)
 
+        # 编辑文本框 (所见即所得样式)
         self.edit_text = ctk.CTkTextbox(
-            self.edit_frame, wrap="word", font=("Consolas", 13),
-            fg_color=c["textbox"], text_color=c["text"], border_width=0, corner_radius=8)
-        self.edit_text.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
-        self.text_widget = self.edit_text._textbox
-        self.text_widget.config(undo=True, autoseparators=True, maxundo=50,
-                                insertbackground=c["text"], padx=14, pady=12)
-        self.edit_text.bind("<KeyRelease>", self.on_text_change)
-        # 光标所在行高亮
-        self.text_widget.bind("<<CursorMove>>", self.update_active_line)
-        self.text_widget.bind("<ButtonRelease-1>", self.update_active_line)
-        self.text_widget.bind("<FocusIn>", self.update_active_line)
+            self.edit_frame,
+            wrap="word",
+            font=("Segoe UI", 12),
+            fg_color=self.colors["surface"],
+            text_color=self.colors["text"],
+            border_width=0
+        )
+        self.edit_text.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
 
-        # 状态
+        self.text_widget = self.edit_text._textbox
+        self.text_widget.config(undo=True, autoseparators=True, maxundo=50)
+        # 光标行高亮
+        self.text_widget.tag_configure("active_line", background=self.colors["active_line"])
+        self.text_widget.bind("<KeyRelease>", self.on_text_change)
+        self.text_widget.bind("<ButtonRelease-1>", self.highlight_active_line)
+        self.text_widget.bind("<FocusIn>", self.highlight_active_line)
+
+        # 预览区 (备选)
+        self.preview_frame = ctk.CTkFrame(self.edit_frame, fg_color=self.colors["surface"])
+        self.preview_frame.grid(row=1, column=0, sticky="nsew")
+        ctk.CTkLabel(self.preview_frame, text="👁️ 预览", font=("Segoe UI", 12), text_color=self.colors["text_secondary"]).pack(anchor="w")
+        self.preview_html = HTMLLabel(
+            self.preview_frame,
+            background=self.colors["surface"],
+            html="<p style='color: gray;'>预览区</p>",
+            font=("Segoe UI", 12)
+        )
+        self.preview_html.pack(fill="both", expand=True)
+
+        # ---------- 状态变量 ----------
         self.current_file = None
+
+        # 初始化样式标签
         self.setup_style_tags()
-        self.apply_markdown_styles()
-        self.update_active_line()
+        self.update_preview()
         self.update_outline()
         self.update_title()
 
-    # ---------- WinUI 工具 ----------
-    @staticmethod
-    def _winui_colors():
-        """返回当前主题的 WinUI 风格配色（Fluent 设计语言）"""
-        dark = ctk.get_appearance_mode().lower() == "dark"
-        if dark:
-            return {
-                "window": "#202020", "card": "#2b2b2b", "control": "#2b2b2b",
-                "hover": "#3c3c3c", "active": "#484848", "border": "#3a3a3a",
-                "text": "#ffffff", "muted": "#9e9e9e", "accent": "#60cdff",
-                "textbox": "#1f1f1f", "title": "#202020",
-            }
-        return {
-            "window": "#f3f3f3", "card": "#f9f9f9", "control": "#ffffff",
-            "hover": "#e6e6e6", "active": "#cccccc", "border": "#e0e0e0",
-            "text": "#1b1b1b", "muted": "#616161", "accent": "#0067c0",
-            "textbox": "#ffffff", "title": "#f3f3f3",
-        }
+        # 启动自动保存定时器
+        self.reset_auto_save_timer()
 
-    def _add_tool_button(self, parent, text, command, width=70):
-        """WinUI 风格按钮：无边框圆角、中性底色、悬停高亮"""
-        c = self._winui_colors()
+    # ---------- 辅助方法 ----------
+    def _add_tool_button(self, parent, text, command):
         btn = ctk.CTkButton(
-            parent, text=text, width=width, height=30, command=command,
-            font=(self.UI_FONT, 12),
-            fg_color=c["control"], hover_color=c["hover"], text_color=c["text"],
-            corner_radius=6, border_width=0)
-        btn.pack(side="left", padx=2)
-        self._tool_buttons.append(btn)
+            parent,
+            text=text,
+            width=60,
+            height=28,
+            corner_radius=4,
+            fg_color="transparent",
+            text_color=self.colors["text"],
+            hover_color=self.colors["active_line"],
+            command=command
+        )
+        btn.pack(side="left", padx=1)
         return btn
 
-    def _add_separator(self):
-        c = self._winui_colors()
-        sep = ctk.CTkFrame(self.toolbar_frame, width=1, height=24, fg_color=c["border"])
-        sep.pack(side="left", padx=8)
+    # ---------- 设置窗口 ----------
+    def open_settings(self):
+        SettingsWindow(
+            self,
+            self.current_theme,
+            self.auto_save_enabled,
+            self.auto_save_interval
+        )
 
-    # ---------- 编辑方法 ----------
-    def undo(self):
+    # ---------- 主题切换（供设置窗口调用） ----------
+    def set_theme(self, mode):
+        ctk.set_appearance_mode(mode)
+        self.current_theme = mode
+        self.colors = _winui_colors(mode)
+
+        # 更新界面颜色
+        self.main_frame.configure(fg_color=self.colors["bg"])
+        self.edit_frame.configure(fg_color=self.colors["surface"])
+        self.preview_frame.configure(fg_color=self.colors["surface"])
+        self.outline_frame.configure(fg_color=self.colors["surface"])
+        self.outline_listbox.config(bg=self.colors["surface"], fg=self.colors["text"])
+        self.preview_html.configure(background=self.colors["surface"])
+        self.edit_text.configure(fg_color=self.colors["surface"], text_color=self.colors["text"])
+        self.toolbar_frame.configure(fg_color="transparent")
+        self.setup_style_tags()
+        self.apply_styles()
+
+        # 标题栏
         try:
-            self.text_widget.edit_undo()
-        except tk.TclError:
-            pass
-
-    def redo(self):
-        try:
-            self.text_widget.edit_redo()
-        except tk.TclError:
-            pass
-
-    def select_all(self):
-        self.edit_text.tag_add("sel", "1.0", "end-1c")
-        self.edit_text.focus()
-
-    def cut(self):
-        self.edit_text.event_generate("<<Cut>>")
-
-    def copy(self):
-        self.edit_text.event_generate("<<Copy>>")
-
-    def paste(self):
-        self.edit_text.event_generate("<<Paste>>")
-
-    def delete_selected(self):
-        try:
-            self.edit_text.delete("sel.first", "sel.last")
-        except tk.TclError:
-            self.edit_text.delete("insert", "insert+1c")
-
-    # ---------- 主题切换 ----------
-    def toggle_theme(self):
-        modes = ["system", "light", "dark"]
-        current = ctk.get_appearance_mode().lower()
-        idx = modes.index(current) if current in modes else 0
-        next_mode = modes[(idx + 1) % len(modes)]
-        ctk.set_appearance_mode(next_mode)
-        c = self._winui_colors()
-        # 窗口与标题栏
-        self.configure(fg_color=c["window"])
-        try:
-            pywinstyles.change_header_color(self, c["title"])
+            pywinstyles.apply_style(self, "dark" if mode == "dark" else "light")
+            pywinstyles.change_header_color(self, self.colors["bg"])
         except Exception:
             pass
-        # 大纲
-        self.outline_listbox.config(bg=c["card"], fg=c["text"],
-                                    selectbackground=c["accent"])
-        self.outline_title.configure(text_color=c["muted"])
-        # 编辑区
-        self.edit_frame.configure(fg_color=c["textbox"])
-        self.edit_text.configure(fg_color=c["textbox"], text_color=c["text"])
-        self.text_widget.config(insertbackground=c["text"])
-        # 工具栏按钮
-        for btn in self._tool_buttons:
-            btn.configure(fg_color=c["control"], hover_color=c["hover"],
-                          text_color=c["text"])
-        # 重新配置并应用渲染样式
-        self.setup_style_tags()
-        self.apply_markdown_styles()
-        self.update_active_line()
 
-    # ---------- Markdown 渲染（编辑区即预览区，风格参考 Typedown/Muya + GitHub） ----------
+    # ---------- 自动保存 ----------
+    def reset_auto_save_timer(self):
+        """重置自动保存定时器（每次输入后调用）"""
+        self.cancel_auto_save_timer()
+        if self.auto_save_enabled:
+            self.auto_save_timer = self.after(self.auto_save_interval * 1000, self.do_auto_save)
+
+    def cancel_auto_save_timer(self):
+        if self.auto_save_timer:
+            self.after_cancel(self.auto_save_timer)
+            self.auto_save_timer = None
+
+    def do_auto_save(self):
+        """执行自动保存"""
+        if self.auto_save_enabled:
+            # 检查内容是否为空
+            if self.edit_text.get("1.0", "end-1c").strip():
+                self.save_file()
+            # 重新设定定时器
+            self.reset_auto_save_timer()
+
+    # ---------- 标签样式 (Markdown 高亮) ----------
     def setup_style_tags(self):
-        """配置所见即所得的样式标签（随主题更新）"""
-        dark = ctk.get_appearance_mode().lower() == "dark"
-        t = self.text_widget
-        self._style_tags = [
-            "h1", "h2", "h3", "h4", "h5", "h6",
-            "bold", "italic", "strikethrough", "code", "code_block", "lang",
-            "blockquote", "hr", "list", "link", "img", "checkbox", "checkbox_on", "para",
-        ]
-        # WinUI + GitHub markdown 配色
-        fg = "#ffffff" if dark else "#1b1b1b"
-        muted = "#8b949e" if dark else "#57606a"
-        link = "#60cdff" if dark else "#0067c0"
-        hr_color = "#3d444d" if dark else "#d0d7de"
-        code_bg = "#2b2b2b" if dark else "#f0f0f0"
-        quote_bg = "#2b2b2b" if dark else "#f5f5f5"
-        check_bg = "#3c3c3c" if dark else "#eaeef2"
-        check_on = "#3fb950" if dark else "#1a7f37"
-        active_bg = "#2a2a2a" if dark else "#f0f0f0"
+        # 先删除旧标签（避免冲突）
+        for tag in self.text_widget.tag_names():
+            if tag not in ("sel", "active_line"):
+                self.text_widget.tag_delete(tag)
 
-        # 标题：GitHub 比例（2em/1.5em/1.25em…），h1/h2 带底部边框（下划线模拟）
-        sizes = {1: 24, 2: 20, 3: 17, 4: 15, 5: 14, 6: 13}
-        for level, size in sizes.items():
-            kwargs = dict(
-                font=("Microsoft YaHei UI", size, "bold"),
-                foreground=fg, spacing1=10, spacing3=6,
-            )
-            if level <= 2:
-                kwargs["underline"] = True
-            t.tag_configure(f"h{level}", **kwargs)
-        t.tag_configure("bold", font=("Consolas", 13, "bold"), foreground=fg)
-        t.tag_configure("italic", font=("Consolas", 13, "italic"), foreground=fg)
-        t.tag_configure("strikethrough", overstrike=True, foreground=muted)
-        t.tag_configure("code", font=("Consolas", 12), foreground=fg, background=code_bg)
-        t.tag_configure("code_block", font=("Consolas", 12), foreground=fg,
-                        background=code_bg, spacing1=5, spacing3=5, lmargin1=8, lmargin2=8)
-        t.tag_configure("lang", foreground=link, font=("Consolas", 11, "italic"))
-        t.tag_configure("blockquote", foreground=muted, background=quote_bg,
-                        lmargin1=14, lmargin2=14, spacing1=2, spacing3=4)
-        t.tag_configure("hr", foreground=hr_color)
-        t.tag_configure("list", foreground=fg, spacing1=2, spacing3=2)
-        t.tag_configure("link", foreground=link, underline=True)
-        t.tag_configure("img", foreground=muted, font=("Microsoft YaHei UI", 12, "italic"),
-                        background=code_bg, spacing1=4, spacing3=4)
-        t.tag_configure("checkbox", foreground=muted, background=check_bg)
-        t.tag_configure("checkbox_on", foreground=check_on, background=check_bg)
-        t.tag_configure("para", spacing3=5, spacing1=1)
+        colors = self.colors
+        self.text_widget.tag_configure("h1", font=("Segoe UI", 18, "bold"), foreground=colors["text"])
+        self.text_widget.tag_configure("h2", font=("Segoe UI", 16, "bold"), foreground=colors["text"])
+        self.text_widget.tag_configure("h3", font=("Segoe UI", 14, "bold"), foreground=colors["text"])
+        self.text_widget.tag_configure("h4", font=("Segoe UI", 12, "bold"), foreground=colors["text"])
+        self.text_widget.tag_configure("h5", font=("Segoe UI", 11, "bold"), foreground=colors["text"])
+        self.text_widget.tag_configure("h6", font=("Segoe UI", 10, "bold"), foreground=colors["text"])
+        self.text_widget.tag_configure("bold", font=("Segoe UI", 12, "bold"), foreground=colors["text"])
+        self.text_widget.tag_configure("italic", font=("Segoe UI", 12, "italic"), foreground=colors["text"])
+        self.text_widget.tag_configure("code", font=("Consolas", 11), background="#3a3a3a" if self.current_theme == "dark" else "#e0e0e0", foreground="#d4d4d4" if self.current_theme == "dark" else "#000000")
+        self.text_widget.tag_configure("strike", overstrike=True, foreground=colors["text_secondary"])
+        self.text_widget.tag_configure("link", foreground=colors["accent"], underline=True)
+        self.text_widget.tag_configure("list", lmargin1=20, lmargin2=40)
+        self.text_widget.tag_configure("quote", lmargin1=20, lmargin2=20, foreground=colors["text_secondary"])
 
-        # 光标所在行高亮（Typedown/Muya 编辑体验），置于最底层
-        t.tag_configure("active_line", background=active_bg)
-        t.tag_lower("active_line")
+    # ---------- 样式应用 (所见即所得) ----------
+    def apply_styles(self):
+        for tag in self.text_widget.tag_names():
+            if tag not in ("sel", "active_line"):
+                self.text_widget.tag_remove(tag, "1.0", "end")
 
-        # 优先级：行内代码 > 加粗 > 斜体 > 链接 > 删除线
-        t.tag_raise("code")
-        t.tag_raise("bold")
-        t.tag_raise("italic")
-        t.tag_raise("link")
-        t.tag_raise("strikethrough")
+        content = self.text_widget.get("1.0", "end-1c")
+        lines = content.split("\n")
+        pos = 1
+        for line in lines:
+            line_start = f"{pos}.0"
+            line_end = f"{pos}.end"
+            stripped = line.lstrip()
+            indent = len(line) - len(stripped)
 
-    def apply_markdown_styles(self):
-        """对编辑器当前内容实时应用渲染样式（不修改文本内容）"""
-        t = self.text_widget
-        for tag in self._style_tags:
-            t.tag_remove(tag, "1.0", "end")
-        content = t.get("1.0", "end-1c")
-        if not content:
-            return
+            if stripped.startswith("#"):
+                level = len(stripped) - len(stripped.lstrip("#"))
+                if 1 <= level <= 6 and stripped[level] == " ":
+                    tag = f"h{level}"
+                    start = f"{pos}.{indent}"
+                    end = f"{pos}.{indent + len(stripped) - level}"
+                    self.text_widget.tag_add(tag, start, end)
+
+            if re.match(r"^[\s]*[-*+]\s", line):
+                self.text_widget.tag_add("list", line_start, line_end)
+
+            if stripped.startswith(">"):
+                self.text_widget.tag_add("quote", line_start, line_end)
+
+            self._apply_inline_styles(pos, line)
+            pos += 1
+
+        self._apply_code_blocks()
+
+    def _apply_inline_styles(self, line_num, text):
+        for match in re.finditer(r"\*\*([^*]+)\*\*", text):
+            start = f"{line_num}.{match.start()}"
+            end = f"{line_num}.{match.end()}"
+            self.text_widget.tag_add("bold", start, end)
+
+        for match in re.finditer(r"(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)", text):
+            start = f"{line_num}.{match.start()}"
+            end = f"{line_num}.{match.end()}"
+            self.text_widget.tag_add("italic", start, end)
+
+        for match in re.finditer(r"~~([^~]+)~~", text):
+            start = f"{line_num}.{match.start()}"
+            end = f"{line_num}.{match.end()}"
+            self.text_widget.tag_add("strike", start, end)
+
+        for match in re.finditer(r"`([^`]+)`", text):
+            start = f"{line_num}.{match.start()}"
+            end = f"{line_num}.{match.end()}"
+            self.text_widget.tag_add("code", start, end)
+
+        for match in re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", text):
+            start = f"{line_num}.{match.start()}"
+            end = f"{line_num}.{match.end()}"
+            self.text_widget.tag_add("link", start, end)
+
+    def _apply_code_blocks(self):
+        content = self.text_widget.get("1.0", "end-1c")
         lines = content.split("\n")
         in_code = False
-        for i, line in enumerate(lines):
-            start = f"{i + 1}.0"
-            end = f"{i + 1}.end"
-            stripped = line.lstrip()
-            indent = len(line) - len(stripped)  # 行首空白偏移
+        start_line = None
+        for i, line in enumerate(lines, start=1):
+            if line.strip().startswith("```"):
+                if not in_code:
+                    in_code = True
+                    start_line = i
+                else:
+                    in_code = False
+                    for j in range(start_line, i):
+                        self.text_widget.tag_add("code", f"{j}.0", f"{j}.end")
+            elif in_code and line.strip():
+                self.text_widget.tag_add("code", f"{i}.0", f"{i}.end")
 
-            # 代码块（含语言标签，参考 Muya）
-            if stripped.startswith("```"):
-                if not in_code and len(stripped) > 3:
-                    t.tag_add("lang", f"{i + 1}.{indent + 3}", end)
-                in_code = not in_code
-                t.tag_add("code_block", start, end)
-                continue
-            if in_code:
-                t.tag_add("code_block", start, end)
-                continue
+    # ---------- 高亮当前行 ----------
+    def highlight_active_line(self, event=None):
+        self.text_widget.tag_remove("active_line", "1.0", "end")
+        idx = self.text_widget.index("insert")
+        line = idx.split(".")[0]
+        self.text_widget.tag_add("active_line", f"{line}.0", f"{line}.end")
 
-            # 标题
-            m = re.match(r"^(#{1,6})\s+(.*)$", line)
-            if m:
-                level = len(m.group(1))
-                t.tag_add(f"h{min(level, 6)}", start, end)
-                continue
-
-            # 分隔线
-            if re.match(r"^\s*(-{3,}|\*{3,})\s*$", line):
-                t.tag_add("hr", start, end)
-                continue
-
-            # 引用
-            if stripped.startswith(">"):
-                t.tag_add("blockquote", start, end)
-                continue
-
-            # 任务列表（Typedown/Muya 渲染为复选框）
-            m_task = re.match(r"^\s*[-*+]\s+\[([ xX])\]\s", line)
-            if m_task:
-                t.tag_add("list", start, end)
-                m_box = re.search(r"\[([ xX])\]", line)
-                if m_box:
-                    s = f"{i + 1}.{indent + m_box.start()}"
-                    e = f"{i + 1}.{indent + m_box.end()}"
-                    t.tag_add("checkbox_on" if m_box.group(1) in "xX" else "checkbox", s, e)
-                self._apply_inline_styles(t, i, line)
-                continue
-
-            # 图片
-            if re.search(r"!\[[^\]]*\]\([^)\s]+\)", line):
-                t.tag_add("img", start, end)
-                continue
-
-            # 列表
-            if re.match(r"^\s*[-*+]\s", line) or re.match(r"^\s*\d+[.)]\s", line):
-                t.tag_add("list", start, end)
-                self._apply_inline_styles(t, i, line)
-                continue
-
-            # 普通段落：GitHub 风格行距
-            if line.strip():
-                t.tag_add("para", start, end)
-                self._apply_inline_styles(t, i, line)
-
-    @staticmethod
-    def _apply_inline_styles(t, row, line):
-        """行内格式：**加粗**、*斜体*、~~删除线~~、`行内代码`、[链接](url)"""
-        def rng(a, b):
-            return f"{row + 1}.{a}", f"{row + 1}.{b}"
-
-        for m in re.finditer(r"\*\*(.+?)\*\*", line):
-            s, e = rng(m.start(), m.end())
-            t.tag_add("bold", s, e)
-        for m in re.finditer(r"(?<!\*)\*([^*]+?)\*(?!\*)", line):
-            s, e = rng(m.start(), m.end())
-            t.tag_add("italic", s, e)
-        for m in re.finditer(r"~~(.+?)~~", line):
-            s, e = rng(m.start(), m.end())
-            t.tag_add("strikethrough", s, e)
-        for m in re.finditer(r"`([^`]+)`", line):
-            s, e = rng(m.start(), m.end())
-            t.tag_add("code", s, e)
-        for m in re.finditer(r"\[([^\]!]+)\]\(([^)\s]+)\)", line):
-            s, e = rng(m.start(1), m.end(1))
-            t.tag_add("link", s, e)
-
-    def update_active_line(self, event=None):
-        """高亮光标所在行（Typedown/Muya 编辑体验）"""
-        t = self.text_widget
-        try:
-            idx = t.index("insert")
-            row = int(idx.split(".")[0])
-            t.tag_remove("active_line", "1.0", "end")
-            t.tag_add("active_line", f"{row}.0", f"{row}.end")
-        except tk.TclError:
-            pass
-
-    # ---------- 文本变更 ----------
+    # ---------- 事件绑定 ----------
     def on_text_change(self, event=None):
-        self.apply_markdown_styles()
+        self.apply_styles()
+        self.update_preview()
         self.update_outline()
+        self.highlight_active_line()
+        # 重置自动保存定时器
+        self.reset_auto_save_timer()
+
+    def update_preview(self):
+        raw = self.edit_text.get("1.0", "end-1c")
+        html = markdown.markdown(raw, extensions=["extra", "toc"])
+        self.preview_html.set_html(html)
 
     def update_outline(self):
         raw = self.edit_text.get("1.0", "end-1c")
@@ -466,14 +543,47 @@ class MarkdownEditor(ctk.CTk):
         else:
             self.title("156 Markdown Editor")
 
+    # ---------- 编辑操作 ----------
+    def undo(self):
+        try:
+            self.text_widget.edit_undo()
+        except tk.TclError:
+            pass
+
+    def redo(self):
+        try:
+            self.text_widget.edit_redo()
+        except tk.TclError:
+            pass
+
+    def select_all(self):
+        self.text_widget.tag_add("sel", "1.0", "end-1c")
+        self.text_widget.focus()
+
+    def cut(self):
+        self.text_widget.event_generate("<<Cut>>")
+
+    def copy(self):
+        self.text_widget.event_generate("<<Copy>>")
+
+    def paste(self):
+        self.text_widget.event_generate("<<Paste>>")
+
+    def delete_selected(self):
+        try:
+            self.text_widget.delete("sel.first", "sel.last")
+        except tk.TclError:
+            self.text_widget.delete("insert", "insert+1c")
+
     # ---------- 文件操作 ----------
     def new_file(self):
         if self.ask_save_if_dirty():
             self.edit_text.delete("1.0", "end")
             self.current_file = None
             self.update_title()
-            self.apply_markdown_styles()
+            self.update_preview()
             self.update_outline()
+            self.reset_auto_save_timer()
 
     def open_file(self):
         if not self.ask_save_if_dirty():
@@ -489,8 +599,9 @@ class MarkdownEditor(ctk.CTk):
             self.edit_text.insert("1.0", content)
             self.current_file = path
             self.update_title()
-            self.apply_markdown_styles()
+            self.update_preview()
             self.update_outline()
+            self.reset_auto_save_timer()
 
     def save_file(self):
         if self.current_file:
@@ -536,6 +647,12 @@ class MarkdownEditor(ctk.CTk):
             messagebox.showinfo("导出成功", f"HTML 已保存至：{path}")
 
         elif ext == ".pdf":
+            try:
+                subprocess.run(["wkhtmltopdf", "--version"], capture_output=True, check=True)
+            except (subprocess.SubprocessError, FileNotFoundError):
+                messagebox.showerror("缺少依赖", "导出 PDF 需要 wkhtmltopdf，请确保已正确安装并加入 PATH")
+                return
+
             html = markdown.markdown(content, extensions=["extra", "toc"])
             html_doc = f"""<!DOCTYPE html>
 <html>
@@ -543,31 +660,30 @@ class MarkdownEditor(ctk.CTk):
 <body>{html}</body>
 </html>"""
             try:
-                export_pdf(html_doc, path)
-                messagebox.showinfo("导出成功", f"PDF 已保存至：{path}")
-            except FileNotFoundError as e:
-                messagebox.showerror("缺少 wkhtmltopdf", str(e))
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False) as f:
+                    f.write(html_doc)
+                    html_path = f.name
+                pdf_path = path
+                subprocess.run(["wkhtmltopdf", html_path, pdf_path], check=True)
+                os.unlink(html_path)
+                messagebox.showinfo("导出成功", f"PDF 已保存至：{pdf_path}")
             except Exception as e:
                 messagebox.showerror("导出失败", f"生成 PDF 时出错：{e}")
 
         elif ext == ".docx":
-            if not PYPANDOC_AVAILABLE:
+            try:
+                import pypandoc
+            except ImportError:
                 messagebox.showerror("缺少依赖", "导出 Word 需要安装 pypandoc，请运行：pip install pypandoc")
                 return
             try:
-                # 确保 pandoc 可用（自动下载或使用系统）
                 pypandoc.ensure_pandoc_installed()
             except Exception as e:
                 messagebox.showerror("Pandoc 错误", f"无法获取 Pandoc 转换器：{e}")
                 return
             try:
-                output = pypandoc.convert_text(
-                    content,
-                    'docx',
-                    format='md',
-                    extra_args=['--standalone']
-                )
-                with open(path, 'wb') as f:
+                output = pypandoc.convert_text(content, "docx", format="md", extra_args=["--standalone"])
+                with open(path, "wb") as f:
                     f.write(output)
                 messagebox.showinfo("导出成功", f"Word 文档已保存至：{path}")
             except Exception as e:
