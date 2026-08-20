@@ -1,5 +1,6 @@
 customtkinter>=5.2.0
 pywinstyles>=1.8
 markdown>=3.4
-tkhtmlview>=0.1.0
-pypandoc>=1.12       
+pypandoc>=1.12
+mistune>=3.0.0
+pyinstaller>=6.0
