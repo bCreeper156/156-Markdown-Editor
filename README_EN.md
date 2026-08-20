@@ -6,18 +6,34 @@
 
 ## Features
 
-* Real-time outline navigation
+- Real-time outline navigation
 
-* File creation/opening/saving/saving as
+- File creation/opening/saving/saving as
 
-* Light/dark theme switching
+- Light/dark theme switching
 
-* Silent saving (Ctrl+S)
+- Silent saving (Ctrl+S)
 
-## Usage
+## Characteristics
+A 25.4MB native WYSIWYG editor that rejects Chromium and uses Tk for its UI.
 
-1. Double-click the build script (.bat or .sh) for your system.
+Employs a hybrid rendering mode of regular expressions and Mistune for greater stability!
 
-2. Wait for dependencies to install.
+This software is specifically designed for Windows x64. Other platforms require the corresponding dependencies to be installed and built before use!
 
-3. The editor will start automatically.
+## Building from source code
+
+### 1. Install Python
+
+### 2. Install pip dependencies
+
+```bash pip install -r requirements.txt
+
+```
+### 3. Install other dependencies
+
+Create a bin folder and place wkhtmltopdf.exe and pandoc.exe inside.
+
+### 4. Using the Build Script
+
+Double-click build.bat (for Windows users) / build.sh (not yet written, for Linux and macOS users)
