@@ -25,6 +25,8 @@ This software is specifically designed for Windows x64. Other platforms require 
 
 ### 1. Install Python
 
+Please go to the official Python website to download Python 3.11.3, and check the option to add it to your environment variables during installation.
+
 ### 2. Install pip dependencies
 
 ```bash pip install -r requirements.txt
