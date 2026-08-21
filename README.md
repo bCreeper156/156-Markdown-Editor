@@ -21,6 +21,8 @@
 
 ### 1.安装Python
 
+请进入[Python官网](https://python.org)下载Python3.11.3并在安装时勾选添加至环境变量。
+
 ### 2.安装pip依赖
 
 ```bash
