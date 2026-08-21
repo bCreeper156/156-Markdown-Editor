@@ -1,7 +1,7 @@
-# è¿›å…¥é¡¹ç›®ç›®å½•
+# ½øÈëÏîÄ¿Ä¿Â¼
 cd E:\156soft\156 Markdown Editor
 
-# ç¡®è®¤ bin æ–‡ä»¶å¤¹å­˜åœ¨ï¼ŒåŒ…å« wkhtmltopdf.exe å’Œ pandoc.exe
+# È·ÈÏ bin ÎÄ¼ş¼Ğ´æÔÚ£¬°üº¬ wkhtmltopdf.exe ºÍ pandoc.exe
 
-# æ‰“åŒ…
-pyinstaller --onefile --windowed --add-data "bin;bin" --hidden-import pypandoc --hidden-import markdown.extensions.extra --hidden-import markdown.extensions.toc --collect-all customtkinter --collect-all pywinstyles --icon=icon.ico main.py
+# ´ò°ü
+pyinstaller --onefile --windowed --uac-admin --add-data "bin;bin" --hidden-import pypandoc --hidden-import markdown.extensions.extra --hidden-import markdown.extensions.toc --collect-all customtkinter --collect-all pywinstyles --icon=icon.ico main.py
